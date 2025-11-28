@@ -1,0 +1,9 @@
+button[role="switch"][aria-checked="true"] svg {
+    color: #39ff14 !important;
+    filter: drop-shadow(0 0 4px #39ff14) drop-shadow(0 0 8px #39ff14);
+}
+
+button[role="switch"][aria-checked="true"]:hover svg {
+    filter: drop-shadow(0 0 6px #39ff14) drop-shadow(0 0 12px #39ff14);
+}
+
