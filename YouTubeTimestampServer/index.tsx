@@ -1,8 +1,6 @@
-import ErrorBoundary from "@components/ErrorBoundary";
-import { definePluginSettings } from "@api/Settings";
+import { definePluginSettings, SettingsStore } from "@api/Settings";
 import { NavContextMenuPatchCallback } from "@api/ContextMenu";
-import { MessageActions, MessageStore, SelectedChannelStore, useEffect, React, Menu } from "@webpack/common";
-import { findComponentByCodeLazy } from "@webpack";
+import { MessageActions, MessageStore, SelectedChannelStore, React, Menu, FluxDispatcher } from "@webpack/common";
 import definePlugin, { OptionType, PluginNative } from "@utils/types";
 
 import styles from "./styles.css?managed";
@@ -49,15 +47,17 @@ const settings = definePluginSettings({
     }
 });
 
-const Button = findComponentByCodeLazy(".NONE,disabled:", ".PANEL_BUTTON");
-
 let checkInterval: NodeJS.Timeout | null = null;
 let targetTimestamp: string | null = null; // The timestamp we're trying to scroll to
 let lastFetchedTimestamp: string | null = null; // Last timestamp fetched from server
 let lastScrolledMessageId: string | null = null; // Last message ID we scrolled to
 let lastTargetTime: number | null = null; // Last target timestamp in milliseconds
+let isContextMenuOpen = false; // Track if context menu is open
+let contextMenuListener: ((event: any) => void) | null = null;
+let channelChangeListener: ((event: any) => void) | null = null;
+let currentChannelId: string | null = null;
 
-async function fetchTimestamp(): Promise<{ gmt: string } | null> {
+async function fetchTimestamp(): Promise<{ gmt: string; } | null> {
     try {
         const port = settings.store.port;
         const response = await fetch(`http://localhost:${port}/ping`);
@@ -70,7 +70,7 @@ async function fetchTimestamp(): Promise<{ gmt: string } | null> {
     }
 }
 
-function findMessageByTimestamp(channelId: string, targetTimestamp: string): { id: string; diff: number; isClosest: boolean } | null {
+function findMessageByTimestamp(channelId: string, targetTimestamp: string): { id: string; diff: number; isClosest: boolean; } | null {
     const messages = MessageStore.getMessages(channelId);
     if (!messages) return null;
 
@@ -90,13 +90,13 @@ function findMessageByTimestamp(channelId: string, targetTimestamp: string): { i
     }
 
     // Find all messages with timestamps and their differences
-    const messagesWithDiffs: Array<{ id: string; diff: number; index: number }> = [];
+    const messagesWithDiffs: Array<{ id: string; diff: number; index: number; }> = [];
 
     for (let i = startIndex; i < messageArray.length; i++) {
         const message = messageArray[i];
         if (!message.timestamp) continue;
         const messageTime = message.timestamp.valueOf();
-        
+
         // When moving forward, prefer messages that are at or after the target time
         // When moving backward or first time, use absolute difference
         let diff: number;
@@ -111,14 +111,14 @@ function findMessageByTimestamp(channelId: string, targetTimestamp: string): { i
             // First time or moving backward: use absolute difference
             diff = Math.abs(messageTime - targetTime);
         }
-        
+
         messagesWithDiffs.push({ id: message.id, diff, index: i });
     }
 
     if (messagesWithDiffs.length === 0) return null;
 
     // Find the closest message
-    const closestMessage = messagesWithDiffs.reduce((prev, curr) => 
+    const closestMessage = messagesWithDiffs.reduce((prev, curr) =>
         curr.diff < prev.diff ? curr : prev
     );
 
@@ -190,13 +190,13 @@ function scrollToTimestamp() {
         if (lastFetchedTimestamp !== data.gmt) {
             lastFetchedTimestamp = data.gmt;
             const newTargetTime = new Date(data.gmt).getTime();
-            
+
             // Only reset scroll tracking if timestamp moved forward significantly
             // If moving backward or small forward change, keep trying to reach the target
             if (lastTargetTime === null || newTargetTime > lastTargetTime + 1000) {
                 lastScrolledMessageId = null; // Reset so we'll try to scroll to the new target
             }
-            
+
             targetTimestamp = data.gmt;
             lastTargetTime = newTargetTime;
         }
@@ -208,11 +208,111 @@ function scrollToTimestamp() {
     });
 }
 
+function findMessageElement(messageId: string): Element | null {
+    return document.getElementById(`message-content-${messageId}`) ||
+        document.querySelector(`[id*="message-content-${messageId}"]`) ||
+        document.querySelector(`[data-message-id="${messageId}"]`) ||
+        document.querySelector(`[class*="message"][class*="${messageId}"]`);
+}
+
+function findScrollContainer(element: Element): Element | null {
+    let scrollContainer: Element | null = element.parentElement;
+    while (scrollContainer && scrollContainer !== document.body) {
+        const classes = scrollContainer.className?.toString() || "";
+        if ((classes.includes("scroller") || classes.includes("messages") ||
+            classes.includes("chatContent")) &&
+            scrollContainer.scrollHeight > scrollContainer.clientHeight) {
+            return scrollContainer;
+        }
+        scrollContainer = scrollContainer.parentElement;
+    }
+    return null;
+}
+
+let isScrolling = false;
+let scrollAnimationFrame: number | null = null;
+
+function smoothScrollTo(scrollContainer: Element, targetScrollTop: number, duration: number = 500) {
+    const startScrollTop = scrollContainer.scrollTop;
+    const distance = targetScrollTop - startScrollTop;
+    const startTime = performance.now();
+
+    if (Math.abs(distance) < 5) {
+        isScrolling = false;
+        return;
+    }
+
+    const animate = (currentTime: number) => {
+        const elapsed = currentTime - startTime;
+        const progress = Math.min(elapsed / duration, 1);
+
+        // Easing function (ease-out)
+        const easeOut = 1 - Math.pow(1 - progress, 3);
+
+        const currentScrollTop = startScrollTop + (distance * easeOut);
+        scrollContainer.scrollTop = currentScrollTop;
+
+        if (progress < 1) {
+            scrollAnimationFrame = requestAnimationFrame(animate);
+        } else {
+            isScrolling = false;
+            scrollAnimationFrame = null;
+        }
+    };
+
+    scrollAnimationFrame = requestAnimationFrame(animate);
+}
+
+function scrollMessageToBottom(messageElement: Element, scrollContainer: Element | null) {
+    if (isScrolling) {
+        // Cancel previous animation if still running
+        if (scrollAnimationFrame !== null) {
+            cancelAnimationFrame(scrollAnimationFrame);
+            scrollAnimationFrame = null;
+        }
+    }
+
+    isScrolling = true;
+
+    if (scrollContainer) {
+        requestAnimationFrame(() => {
+            const rect = messageElement.getBoundingClientRect();
+            const containerRect = scrollContainer.getBoundingClientRect();
+            const viewportHeight = containerRect.height;
+            const messageTop = rect.top - containerRect.top;
+            const messageHeight = rect.height;
+
+            // Calculate scroll position to put message at bottom (with padding)
+            const currentScrollTop = scrollContainer.scrollTop;
+            const targetScrollTop = currentScrollTop + messageTop - viewportHeight + messageHeight + 20;
+
+            // Use custom smooth scroll animation
+            smoothScrollTo(scrollContainer, targetScrollTop, 400);
+        });
+    } else {
+        // Fallback: use scrollIntoView
+        requestAnimationFrame(() => {
+            messageElement.scrollIntoView({
+                behavior: "smooth",
+                block: "end",
+                inline: "nearest"
+            });
+
+            setTimeout(() => {
+                isScrolling = false;
+            }, 600);
+        });
+    }
+}
+
 function attemptScrollToTarget(channelId: string) {
     if (!targetTimestamp) return;
 
+    // Don't scroll if context menu is open
+    if (isContextMenuOpen) return;
+
     const result = findMessageByTimestamp(channelId, targetTimestamp);
-    
+
     if (!result) return;
 
     // If we're already at the closest message, don't scroll again
@@ -221,12 +321,46 @@ function attemptScrollToTarget(channelId: string) {
     // Only scroll if we're not already at this message or if it's a different (closer) message
     if (lastScrolledMessageId !== result.id) {
         lastScrolledMessageId = result.id;
-        MessageActions.jumpToMessage({
-            channelId,
-            messageId: result.id,
-            flash: true,
-            jumpType: "SCROLL"
-        });
+
+        // Check if message is already rendered in the DOM
+        const messageElement = findMessageElement(result.id);
+
+        if (messageElement) {
+            // Message is already rendered, use smooth manual scrolling
+            // Small delay to ensure DOM is stable and prevent janky scrolling
+            requestAnimationFrame(() => {
+                requestAnimationFrame(() => {
+                    const scrollContainer = findScrollContainer(messageElement);
+                    scrollMessageToBottom(messageElement, scrollContainer);
+                });
+            });
+        } else {
+            // Message is not rendered (far away), use jumpToMessage
+            MessageActions.jumpToMessage({
+                channelId,
+                messageId: result.id,
+                flash: false,
+                jumpType: "ANIMATED"
+            });
+
+            // After jumping, scroll the message to the bottom of the viewport
+            // Use multiple attempts with increasing delays to handle Discord's rendering
+            const attemptScroll = (attempt: number = 0) => {
+                if (attempt > 5) return; // Max 5 attempts
+
+                const element = findMessageElement(result.id);
+                if (element) {
+                    const scrollContainer = findScrollContainer(element);
+                    scrollMessageToBottom(element, scrollContainer);
+                } else if (attempt < 5) {
+                    // Retry if element not found yet
+                    setTimeout(() => attemptScroll(attempt + 1), 100 * (attempt + 1));
+                }
+            };
+
+            // Start attempting after a short delay to allow Discord to render
+            setTimeout(() => attemptScroll(), 200);
+        }
     }
 }
 
@@ -242,44 +376,29 @@ function stopPeriodicCheck() {
         clearInterval(checkInterval);
         checkInterval = null;
     }
+
+    // Cancel any ongoing scroll animation
+    if (scrollAnimationFrame !== null) {
+        cancelAnimationFrame(scrollAnimationFrame);
+        scrollAnimationFrame = null;
+    }
+    isScrolling = false;
+
     targetTimestamp = null;
     lastFetchedTimestamp = null;
     lastScrolledMessageId = null;
     lastTargetTime = null;
 }
 
-function TimestampIcon() {
-    return (
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 14.5v-9l6 4.5-6 4.5z" />
-        </svg>
-    );
-}
-
-function TimestampScrollButton(props: { nameplate?: any; }) {
-    const { enabled } = settings.use(["enabled"]);
-
-    useEffect(() => {
-        if (enabled) {
-            startPeriodicCheck();
-        } else {
-            stopPeriodicCheck();
-        }
-        return () => {
-            if (!enabled) stopPeriodicCheck();
-        };
-    }, [enabled]);
-
-    return (
-        <Button
-            tooltipText={enabled ? "Disable Timestamp Scrolling" : "Enable Timestamp Scrolling"}
-            icon={TimestampIcon}
-            role="switch"
-            aria-checked={enabled}
-            onClick={() => settings.store.enabled = !enabled}
-            plated={props?.nameplate != null}
-        />
-    );
+function updateEnabledState(enabled: boolean) {
+    // Toggle body class for CSS to hide prompts
+    if (enabled) {
+        document.body.classList.add("vc-youtube-timestamp-autoscroll-enabled");
+        startPeriodicCheck();
+    } else {
+        document.body.classList.remove("vc-youtube-timestamp-autoscroll-enabled");
+        stopPeriodicCheck();
+    }
 }
 
 export default definePlugin({
@@ -295,6 +414,45 @@ export default definePlugin({
     managedStyle: styles,
 
     start() {
+        // Set initial body class state
+        updateEnabledState(settings.store.enabled);
+
+        // Listen for settings changes
+        const listener = () => {
+            updateEnabledState(settings.store.enabled);
+        };
+        SettingsStore.addChangeListener(`plugins.${this.name}.enabled`, listener);
+
+        // Store listener for cleanup
+        (this as any)._removeSettingsListener = () => {
+            SettingsStore.removeChangeListener(`plugins.${this.name}.enabled`, listener);
+        };
+
+        // Listen for context menu open/close events to pause scrolling
+        contextMenuListener = (event: any) => {
+            if (event.type === "CONTEXT_MENU_OPEN") {
+                isContextMenuOpen = true;
+            } else if (event.type === "CONTEXT_MENU_CLOSE") {
+                isContextMenuOpen = false;
+            }
+        };
+        FluxDispatcher.subscribe("CONTEXT_MENU_OPEN", contextMenuListener);
+        FluxDispatcher.subscribe("CONTEXT_MENU_CLOSE", contextMenuListener);
+
+        // Listen for channel/server changes to disable autoscrolling
+        currentChannelId = SelectedChannelStore.getChannelId();
+        channelChangeListener = (event: any) => {
+            const newChannelId = event.channelId ?? SelectedChannelStore.getChannelId();
+            if (newChannelId && newChannelId !== currentChannelId) {
+                currentChannelId = newChannelId;
+                // Disable autoscrolling when switching channels/servers
+                if (settings.store.enabled) {
+                    settings.store.enabled = false;
+                }
+            }
+        };
+        FluxDispatcher.subscribe("CHANNEL_SELECT", channelChangeListener);
+
         const Native = getNative();
         if (Native) {
             const port = settings.store.port;
@@ -314,6 +472,29 @@ export default definePlugin({
 
     stop() {
         stopPeriodicCheck();
+        // Remove body class when plugin stops
+        document.body.classList.remove("vc-youtube-timestamp-autoscroll-enabled");
+
+        // Remove settings listener
+        if ((this as any)._removeSettingsListener) {
+            (this as any)._removeSettingsListener();
+        }
+
+        // Remove context menu listeners
+        if (contextMenuListener) {
+            FluxDispatcher.unsubscribe("CONTEXT_MENU_OPEN", contextMenuListener);
+            FluxDispatcher.unsubscribe("CONTEXT_MENU_CLOSE", contextMenuListener);
+            contextMenuListener = null;
+        }
+        isContextMenuOpen = false;
+
+        // Remove channel change listeners
+        if (channelChangeListener) {
+            FluxDispatcher.unsubscribe("CHANNEL_SELECT", channelChangeListener);
+            channelChangeListener = null;
+        }
+        currentChannelId = null;
+
         const Native = getNative();
         if (Native) {
             Native.stopServerIPC().catch(error => {
@@ -322,19 +503,23 @@ export default definePlugin({
         }
     },
 
-    patches: [
-        {
-            find: "#{intl::ACCOUNT_SPEAKING_WHILE_MUTED}",
-            replacement: {
-                match: /className:\i\.buttons,.{0,50}children:\[/,
-                replace: "$&$self.TimestampScrollButton(arguments[0]),"
-            }
-        }
-    ],
-
-    TimestampScrollButton: ErrorBoundary.wrap(TimestampScrollButton, { noop: true }),
+    patches: [],
 
     contextMenus: {
+        "channel-context": ((children, props) => {
+            const enabled = settings.store.enabled;
+
+            children.push(
+                <Menu.MenuCheckboxItem
+                    id="toggle-timestamp-autoscroll"
+                    label="Enable Timestamp Autoscroll"
+                    checked={enabled}
+                    action={() => {
+                        settings.store.enabled = !enabled;
+                    }}
+                />
+            );
+        }) as NavContextMenuPatchCallback,
         "message": ((children, props) => {
             const { message } = props;
             if (!message?.timestamp) return;

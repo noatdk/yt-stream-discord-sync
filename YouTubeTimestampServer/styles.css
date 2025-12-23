@@ -7,3 +7,23 @@ button[role="switch"][aria-checked="true"]:hover svg {
     filter: drop-shadow(0 0 6px #39ff14) drop-shadow(0 0 12px #39ff14);
 }
 
+/* Hide "Jump to present" and "new messages" prompts when autoscrolling is enabled */
+.vc-youtube-timestamp-autoscroll-enabled [class*="jumpToPresent"],
+.vc-youtube-timestamp-autoscroll-enabled [class*="jump-to-present"],
+.vc-youtube-timestamp-autoscroll-enabled button[aria-label*="Jump to present"],
+.vc-youtube-timestamp-autoscroll-enabled button[aria-label*="jump to present"],
+.vc-youtube-timestamp-autoscroll-enabled [class*="newMessages"],
+.vc-youtube-timestamp-autoscroll-enabled [class*="new-messages"],
+.vc-youtube-timestamp-autoscroll-enabled [class*="newMessagesBar"],
+.vc-youtube-timestamp-autoscroll-enabled [class*="newMessagesBarContainer"],
+.vc-youtube-timestamp-autoscroll-enabled [class*="newMessagesBarButton"],
+.vc-youtube-timestamp-autoscroll-enabled [class*="unreadBar"],
+.vc-youtube-timestamp-autoscroll-enabled [class*="unreadBarContainer"],
+.vc-youtube-timestamp-autoscroll-enabled [class*="unreadBarButton"],
+.vc-youtube-timestamp-autoscroll-enabled [class*="barBase"],
+.vc-youtube-timestamp-autoscroll-enabled [class*="barButton"],
+.vc-youtube-timestamp-autoscroll-enabled [class*="barContainer"],
+.vc-youtube-timestamp-autoscroll-enabled [class*="jumpButton"],
+.vc-youtube-timestamp-autoscroll-enabled [class*="jumpButtonContainer"] {
+    display: none !important;
+}
