@@ -1,9 +1,45 @@
 import { definePluginSettings, SettingsStore } from "@api/Settings";
 import { NavContextMenuPatchCallback } from "@api/ContextMenu";
-import { MessageActions, MessageStore, SelectedChannelStore, React, Menu, FluxDispatcher } from "@webpack/common";
+import { MessageActions, MessageStore, SelectedChannelStore, React, Menu, FluxDispatcher, i18n } from "@webpack/common";
 import definePlugin, { OptionType, PluginNative } from "@utils/types";
 
 import styles from "./styles.css?managed";
+
+// i18n messages for English and Japanese
+const Messages = {
+    en: {
+        SETTINGS_ENABLED: "Enable automatic scrolling to timestamp messages",
+        SETTINGS_CHECK_INTERVAL: "Check interval in seconds",
+        SETTINGS_PORT: "Server port",
+        CONTEXT_MENU_ENABLE: "Enable Timestamp Autoscroll",
+        CONTEXT_MENU_SET_REDIRECT: "Set as Redirect Timestamp"
+    },
+    ja: {
+        SETTINGS_ENABLED: "タイムスタンプメッセージへの自動スクロールを有効にする",
+        SETTINGS_CHECK_INTERVAL: "チェック間隔（秒）",
+        SETTINGS_PORT: "サーバーポート",
+        CONTEXT_MENU_ENABLE: "タイムスタンプ自動スクロールを有効にする",
+        CONTEXT_MENU_SET_REDIRECT: "リダイレクトタイムスタンプとして設定"
+    }
+};
+
+// Get current language (defaults to English)
+function getLanguage(): "en" | "ja" {
+    try {
+        // Try to get locale from i18n.intl or check Discord's locale
+        const locale = (i18n?.intl?.locale || navigator.language || "en").toLowerCase();
+        if (locale.startsWith("ja")) return "ja";
+        return "en";
+    } catch {
+        return "en";
+    }
+}
+
+// Get translated message
+function t(key: keyof typeof Messages.en): string {
+    const lang = getLanguage();
+    return Messages[lang][key] || Messages.en[key];
+}
 
 function getNative() {
     try {
@@ -16,17 +52,17 @@ function getNative() {
 const settings = definePluginSettings({
     enabled: {
         type: OptionType.BOOLEAN,
-        description: "Enable automatic scrolling to timestamp messages",
+        description: t("SETTINGS_ENABLED"),
         default: false
     },
     checkInterval: {
         type: OptionType.NUMBER,
-        description: "Check interval in seconds",
+        description: t("SETTINGS_CHECK_INTERVAL"),
         default: 2
     },
     port: {
         type: OptionType.NUMBER,
-        description: "Server port",
+        description: t("SETTINGS_PORT"),
         default: 8080,
         onChange(newValue) {
             // Restart server with new port
@@ -512,7 +548,7 @@ export default definePlugin({
             children.push(
                 <Menu.MenuCheckboxItem
                     id="toggle-timestamp-autoscroll"
-                    label="Enable Timestamp Autoscroll"
+                    label={t("CONTEXT_MENU_ENABLE")}
                     checked={enabled}
                     action={() => {
                         settings.store.enabled = !enabled;
@@ -529,7 +565,7 @@ export default definePlugin({
             children.push(
                 <Menu.MenuItem
                     id="set-redirect-timestamp"
-                    label="Set as Redirect Timestamp"
+                    label={t("CONTEXT_MENU_SET_REDIRECT")}
                     action={async () => {
                         try {
                             const port = settings.store.port;
