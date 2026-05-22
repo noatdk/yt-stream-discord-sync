@@ -66,6 +66,11 @@
                 return;
             }
 
+            if (message?.type === "settings" && typeof message.enabled === "boolean") {
+                postToPage({ type: "settings", enabled: message.enabled });
+                return;
+            }
+
             if (message?.type === "status") {
                 postToPage(message);
             }

@@ -1,12 +1,10 @@
 (function() {
     "use strict";
 
-    const STORAGE_KEY = "yt-discord-sync-enabled";
     const BRIDGE_SOURCE = "yt-discord-sync-bridge";
     const PAGE_SOURCE = "yt-discord-sync-page";
 
-    let memoryEnabled = true;
-    let enabled = getEnabledState();
+    let enabled = false;
     let lastFetchedTimestamp = null;
     let targetTimestamp = null;
     let lastScrolledMessageId = null;
@@ -22,26 +20,8 @@
     let currentPointerTimestamp = null;
     let timestampActionObserver = null;
 
-    function getEnabledState() {
-        try {
-            return window.localStorage.getItem(STORAGE_KEY) !== "false";
-        } catch {
-            return memoryEnabled;
-        }
-    }
-
-    function setEnabledState(value) {
-        memoryEnabled = value;
-        try {
-            window.localStorage.setItem(STORAGE_KEY, String(value));
-        } catch {
-            // Ignore storage access failures.
-        }
-    }
-
     function applyEnabledState(nextEnabled) {
         enabled = Boolean(nextEnabled);
-        setEnabledState(enabled);
 
         if (enabled) {
             notifyBridgeReady();
@@ -663,7 +643,11 @@
         });
 
         timestampActionObserver.observe(document.body, { childList: true, subtree: true });
-        decorateVisibleTimestampActions();
+        if (enabled) {
+            decorateVisibleTimestampActions();
+        } else {
+            clearTimestampActions();
+        }
     }
 
     function start() {
@@ -672,6 +656,8 @@
 
         if (enabled) {
             notifyBridgeReady();
+        } else {
+            clearTimestampActions();
         }
     }
 

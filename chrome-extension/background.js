@@ -3,9 +3,11 @@ if (typeof importScripts === "function") {
 }
 
 const {
+    ENABLED_KEY,
     DEFAULT_JUMP_OFFSET_SECONDS,
     JUMP_OFFSET_KEY
 } = globalThis.YT_DISCORD_SYNC_CONSTANTS || {
+    ENABLED_KEY: "discordEnabled",
     DEFAULT_JUMP_OFFSET_SECONDS: 25,
     JUMP_OFFSET_KEY: "jumpOffsetSeconds"
 };
@@ -89,6 +91,12 @@ function broadcastTimestamp(timestamp) {
     }
 }
 
+function broadcastSettings(enabled) {
+    for (const port of [...discordPorts]) {
+        postToPort(port, { type: "settings", enabled: Boolean(enabled) });
+    }
+}
+
 function broadcastRedirect(timestamp) {
     chrome.tabs.query({ url: ["https://www.youtube.com/*", "https://youtube.com/*"] }, tabs => {
         for (const tab of tabs || []) {
@@ -142,4 +150,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 
     return false;
+});
+
+chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName !== "local") {
+        return;
+    }
+
+    if (changes[ENABLED_KEY]) {
+        broadcastSettings(changes[ENABLED_KEY].newValue);
+    }
+
+    if (changes[JUMP_OFFSET_KEY]) {
+        jumpOffsetSeconds = normalizeOffsetSeconds(changes[JUMP_OFFSET_KEY].newValue);
+        saveState();
+    }
 });
