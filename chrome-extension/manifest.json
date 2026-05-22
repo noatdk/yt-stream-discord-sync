@@ -1,0 +1,58 @@
+{
+  "manifest_version": 3,
+  "name": "YouTube Discord Timestamp Sync",
+  "version": "1.0.0",
+  "description": "Sync a YouTube live stream timestamp to Discord web through a standalone Chrome extension.",
+  "permissions": [
+    "storage",
+    "tabs"
+  ],
+  "host_permissions": [
+    "https://www.youtube.com/*",
+    "https://youtube.com/*",
+    "https://discord.com/*",
+    "https://*.discord.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_title": "YT Sync"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.youtube.com/*",
+        "https://youtube.com/*"
+      ],
+      "js": [
+        "constants.js",
+        "content/youtube-content.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://discord.com/*",
+        "https://*.discord.com/*"
+      ],
+      "js": [
+        "constants.js",
+        "content/discord-bootstrap.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "page/discord-page.js"
+      ],
+      "matches": [
+        "https://discord.com/*",
+        "https://*.discord.com/*"
+      ]
+    }
+  ]
+}

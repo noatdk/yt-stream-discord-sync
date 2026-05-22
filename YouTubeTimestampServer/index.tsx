@@ -9,15 +9,11 @@ import styles from "./styles.css?managed";
 const Messages = {
     en: {
         SETTINGS_ENABLED: "Enable automatic scrolling to timestamp messages",
-        SETTINGS_CHECK_INTERVAL: "Check interval in seconds",
-        SETTINGS_PORT: "Server port",
         CONTEXT_MENU_ENABLE: "Enable Timestamp Autoscroll",
         CONTEXT_MENU_SET_REDIRECT: "Set as Redirect Timestamp"
     },
     ja: {
         SETTINGS_ENABLED: "タイムスタンプメッセージへの自動スクロールを有効にする",
-        SETTINGS_CHECK_INTERVAL: "チェック間隔（秒）",
-        SETTINGS_PORT: "サーバーポート",
         CONTEXT_MENU_ENABLE: "タイムスタンプ自動スクロールを有効にする",
         CONTEXT_MENU_SET_REDIRECT: "リダイレクトタイムスタンプとして設定"
     }
@@ -54,36 +50,13 @@ const settings = definePluginSettings({
         type: OptionType.BOOLEAN,
         description: t("SETTINGS_ENABLED"),
         default: false
-    },
-    checkInterval: {
-        type: OptionType.NUMBER,
-        description: t("SETTINGS_CHECK_INTERVAL"),
-        default: 2
-    },
-    port: {
-        type: OptionType.NUMBER,
-        description: t("SETTINGS_PORT"),
-        default: 8080,
-        onChange(newValue) {
-            // Restart server with new port
-            const Native = getNative();
-            if (Native) {
-                Native.stopServerIPC().then(() => {
-                    Native.startServerIPC(newValue).catch(error => {
-                        console.error("[YouTubeTimestampServer] Failed to restart server with new port:", error);
-                    });
-                }).catch(() => {
-                    // If stop fails, try to start anyway
-                    Native.startServerIPC(newValue).catch(error => {
-                        console.error("[YouTubeTimestampServer] Failed to start server with new port:", error);
-                    });
-                });
-            }
-        }
     }
 });
 
-let checkInterval: NodeJS.Timeout | null = null;
+const SERVER_PORT = 8080;
+
+let timestampSource: EventSource | null = null;
+let reconnectTimeout: number | null = null;
 let targetTimestamp: string | null = null; // The timestamp we're trying to scroll to
 let lastFetchedTimestamp: string | null = null; // Last timestamp fetched from server
 let lastScrolledMessageId: string | null = null; // Last message ID we scrolled to
@@ -92,19 +65,6 @@ let isContextMenuOpen = false; // Track if context menu is open
 let contextMenuListener: ((event: any) => void) | null = null;
 let channelChangeListener: ((event: any) => void) | null = null;
 let currentChannelId: string | null = null;
-
-async function fetchTimestamp(): Promise<{ gmt: string; } | null> {
-    try {
-        const port = settings.store.port;
-        const response = await fetch(`http://localhost:${port}/ping`);
-        if (!response.ok) return null;
-        const data = await response.json();
-        return data.gmt ? { gmt: data.gmt } : null;
-    } catch (error) {
-        console.error("[YouTubeTimestampServer] Ping error:", error);
-        return null;
-    }
-}
 
 function findMessageByTimestamp(channelId: string, targetTimestamp: string): { id: string; diff: number; isClosest: boolean; } | null {
     const messages = MessageStore.getMessages(channelId);
@@ -208,40 +168,27 @@ function findMessageByTimestamp(channelId: string, targetTimestamp: string): { i
     };
 }
 
-function scrollToTimestamp() {
+function handleIncomingTimestamp(gmt: string) {
     const channelId = SelectedChannelStore.getChannelId();
     if (!channelId) return;
 
-    // First, check for a new timestamp from the server
-    fetchTimestamp().then(data => {
-        if (!data || !data.gmt) {
-            // Continue trying with existing target if we have one
-            if (targetTimestamp) {
-                attemptScrollToTarget(channelId);
-            }
-            return;
+    if (lastFetchedTimestamp !== gmt) {
+        lastFetchedTimestamp = gmt;
+        const newTargetTime = new Date(gmt).getTime();
+
+        // Only reset scroll tracking if timestamp moved forward significantly
+        // If moving backward or small forward change, keep trying to reach the target
+        if (lastTargetTime === null || newTargetTime > lastTargetTime + 1000) {
+            lastScrolledMessageId = null; // Reset so we'll try to scroll to the new target
         }
 
-        // If we got a new timestamp from server, update our target
-        if (lastFetchedTimestamp !== data.gmt) {
-            lastFetchedTimestamp = data.gmt;
-            const newTargetTime = new Date(data.gmt).getTime();
+        targetTimestamp = gmt;
+        lastTargetTime = newTargetTime;
+    }
 
-            // Only reset scroll tracking if timestamp moved forward significantly
-            // If moving backward or small forward change, keep trying to reach the target
-            if (lastTargetTime === null || newTargetTime > lastTargetTime + 1000) {
-                lastScrolledMessageId = null; // Reset so we'll try to scroll to the new target
-            }
-
-            targetTimestamp = data.gmt;
-            lastTargetTime = newTargetTime;
-        }
-
-        // Always try to scroll to the current target
-        if (targetTimestamp) {
-            attemptScrollToTarget(channelId);
-        }
-    });
+    if (targetTimestamp) {
+        attemptScrollToTarget(channelId);
+    }
 }
 
 function findMessageElement(messageId: string): Element | null {
@@ -400,17 +347,64 @@ function attemptScrollToTarget(channelId: string) {
     }
 }
 
-function startPeriodicCheck() {
-    if (checkInterval) return;
-    const interval = settings.store.checkInterval * 1000;
-    checkInterval = setInterval(scrollToTimestamp, interval);
-    scrollToTimestamp();
+function scheduleReconnect() {
+    if (reconnectTimeout !== null) return;
+    reconnectTimeout = window.setTimeout(() => {
+        reconnectTimeout = null;
+        if (settings.store.enabled) {
+            connectTimestampStream();
+        }
+    }, 3000);
 }
 
-function stopPeriodicCheck() {
-    if (checkInterval) {
-        clearInterval(checkInterval);
-        checkInterval = null;
+function connectTimestampStream() {
+    if (timestampSource || !settings.store.enabled) return;
+
+    if (typeof EventSource === "undefined") {
+        console.error("[YouTubeTimestampServer] EventSource is not available in this environment");
+        return;
+    }
+
+    try {
+        timestampSource = new EventSource(`http://localhost:${SERVER_PORT}/events`);
+    } catch (error) {
+        console.error("[YouTubeTimestampServer] Failed to open timestamp stream:", error);
+        scheduleReconnect();
+        return;
+    }
+
+    timestampSource.onmessage = event => {
+        try {
+            const data = JSON.parse(event.data);
+            if (data?.gmt) {
+                handleIncomingTimestamp(data.gmt);
+            }
+        } catch (error) {
+            console.error("[YouTubeTimestampServer] Failed to parse timestamp event:", error);
+        }
+    };
+
+    timestampSource.onerror = () => {
+        if (timestampSource) {
+            timestampSource.close();
+            timestampSource = null;
+        }
+
+        if (settings.store.enabled) {
+            scheduleReconnect();
+        }
+    };
+}
+
+function stopTimestampStream(resetState: boolean = true) {
+    if (timestampSource) {
+        timestampSource.close();
+        timestampSource = null;
+    }
+
+    if (reconnectTimeout !== null) {
+        clearTimeout(reconnectTimeout);
+        reconnectTimeout = null;
     }
 
     // Cancel any ongoing scroll animation
@@ -420,26 +414,28 @@ function stopPeriodicCheck() {
     }
     isScrolling = false;
 
-    targetTimestamp = null;
-    lastFetchedTimestamp = null;
-    lastScrolledMessageId = null;
-    lastTargetTime = null;
+    if (resetState) {
+        targetTimestamp = null;
+        lastFetchedTimestamp = null;
+        lastScrolledMessageId = null;
+        lastTargetTime = null;
+    }
 }
 
 function updateEnabledState(enabled: boolean) {
     // Toggle body class for CSS to hide prompts
     if (enabled) {
         document.body.classList.add("vc-youtube-timestamp-autoscroll-enabled");
-        startPeriodicCheck();
+        connectTimestampStream();
     } else {
         document.body.classList.remove("vc-youtube-timestamp-autoscroll-enabled");
-        stopPeriodicCheck();
+        stopTimestampStream();
     }
 }
 
 export default definePlugin({
     name: "YouTubeTimestampServer",
-    description: "HTTP server for YouTube stream GMT timestamp (updated by userscript)",
+    description: "HTTP server for YouTube stream GMT timestamp (streamed to Discord clients)",
     authors: [
         {
             id: 0n,
@@ -491,8 +487,7 @@ export default definePlugin({
 
         const Native = getNative();
         if (Native) {
-            const port = settings.store.port;
-            Native.startServerIPC(port).then(result => {
+            Native.startServerIPC().then(result => {
                 if (result.success) {
                     console.log(`[YouTubeTimestampServer] Server started on port ${result.port}`);
                 } else {
@@ -507,7 +502,7 @@ export default definePlugin({
     },
 
     stop() {
-        stopPeriodicCheck();
+        stopTimestampStream();
         // Remove body class when plugin stops
         document.body.classList.remove("vc-youtube-timestamp-autoscroll-enabled");
 
@@ -568,8 +563,7 @@ export default definePlugin({
                     label={t("CONTEXT_MENU_SET_REDIRECT")}
                     action={async () => {
                         try {
-                            const port = settings.store.port;
-                            const response = await fetch(`http://localhost:${port}/redirect`, {
+                            const response = await fetch(`http://localhost:${SERVER_PORT}/redirect`, {
                                 method: "POST",
                                 headers: { "Content-Type": "application/json" },
                                 body: JSON.stringify({ timestamp: messageTimestamp })
@@ -587,4 +581,3 @@ export default definePlugin({
         }) as NavContextMenuPatchCallback
     },
 });
-

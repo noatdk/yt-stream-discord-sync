@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>YT Sync</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0f172a;
+        --panel: #111827;
+        --text: #e5e7eb;
+        --muted: #94a3b8;
+        --accent: #22c55e;
+        --accent-off: #64748b;
+        --line: rgba(148, 163, 184, 0.22);
+      }
+
+      body {
+        margin: 0;
+        width: 280px;
+        background: linear-gradient(180deg, #0f172a, #111827);
+        color: var(--text);
+        font: 14px/1.4 system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+      }
+
+      .wrap {
+        padding: 14px;
+      }
+
+      h1 {
+        margin: 0 0 6px;
+        font-size: 15px;
+      }
+
+      p {
+        margin: 0 0 12px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .field {
+        margin: 12px 0 0;
+        padding-top: 12px;
+        border-top: 1px solid var(--line);
+      }
+
+      label {
+        display: block;
+        margin-bottom: 6px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      input[type="number"] {
+        width: 92px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 8px 10px;
+        background: var(--panel);
+        color: var(--text);
+        font: inherit;
+      }
+
+      .hint {
+        margin-top: 6px;
+        color: var(--muted);
+        font-size: 11px;
+      }
+
+      button {
+        width: 100%;
+        border: 0;
+        border-radius: 10px;
+        padding: 10px 12px;
+        color: white;
+        font-weight: 700;
+        cursor: pointer;
+        background: var(--accent);
+      }
+
+      button.off {
+        background: var(--accent-off);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <h1>YT Sync</h1>
+      <p>Toggle Discord web autoscroll for this extension.</p>
+      <button id="toggle">Loading…</button>
+      <div class="field">
+        <label for="jumpOffset">Jump offset</label>
+        <div class="row">
+          <input id="jumpOffset" type="number" min="0" step="1" />
+          <span class="hint">seconds into the past</span>
+        </div>
+      </div>
+    </div>
+    <script src="../constants.js"></script>
+    <script src="popup.js"></script>
+  </body>
+</html>

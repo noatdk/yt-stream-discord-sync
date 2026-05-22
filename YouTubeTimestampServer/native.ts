@@ -1,5 +1,5 @@
 import type { IpcMainInvokeEvent } from "electron";
-import { createServer, Server } from "http";
+import { createServer, Server, ServerResponse } from "http";
 
 const DEFAULT_PORT = 8080;
 const ENDPOINT = "/ping";
@@ -10,6 +10,7 @@ let currentPort = DEFAULT_PORT;
 let timestampData: any = null;
 let lastUpdate: number | null = null;
 let redirectTimestamp: string | null = null; // Redirect timestamp set via context menu
+const sseClients = new Set<ServerResponse>();
 
 let server: Server | null = null;
 
@@ -19,6 +20,45 @@ function isValidTimestamp(timestamp: any): boolean {
     }
     const date = new Date(timestamp);
     return !isNaN(date.getTime()) && timestamp.includes("T") && timestamp.includes("Z");
+}
+
+function writeSseEvent(res: ServerResponse, data: any, eventName?: string) {
+    if (eventName) {
+        res.write(`event: ${eventName}\n`);
+    }
+    res.write(`data: ${JSON.stringify(data)}\n\n`);
+}
+
+function broadcastTimestamp(data: any) {
+    for (const client of [...sseClients]) {
+        try {
+            writeSseEvent(client, data, "timestamp");
+        } catch (error) {
+            console.warn("[YouTubeTimestampServer] Failed to broadcast to SSE client:", error);
+            sseClients.delete(client);
+        }
+    }
+}
+
+function handleSseConnection(res: ServerResponse) {
+    res.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache, no-transform",
+        Connection: "keep-alive",
+        "Access-Control-Allow-Origin": "*",
+        "X-Accel-Buffering": "no"
+    });
+
+    res.write("retry: 3000\n\n");
+    if (timestampData) {
+        writeSseEvent(res, timestampData, "timestamp");
+    }
+
+    sseClients.add(res);
+
+    res.on("close", () => {
+        sseClients.delete(res);
+    });
 }
 
 function startServer(port: number = DEFAULT_PORT): Server {
@@ -47,6 +87,13 @@ function startServer(port: number = DEFAULT_PORT): Server {
             res.writeHead(200);
             res.end();
             return;
+        }
+
+        if (url === "/events" || url === "/events/") {
+            if (method === "GET") {
+                handleSseConnection(res);
+                return;
+            }
         }
 
         // Handle /ping endpoint (GET request)
@@ -107,6 +154,7 @@ function startServer(port: number = DEFAULT_PORT): Server {
                     
                     timestampData = data;
                     lastUpdate = Date.now();
+                    broadcastTimestamp(timestampData);
 
                     const response: any = { success: true, received: timestampData.gmt };
                     
@@ -207,6 +255,14 @@ function stopServer() {
         timestampData = null;
         lastUpdate = null;
         redirectTimestamp = null;
+        for (const client of sseClients) {
+            try {
+                client.end();
+            } catch {
+                // Ignore shutdown errors.
+            }
+        }
+        sseClients.clear();
     }
 }
 
@@ -232,5 +288,4 @@ try {
 } catch (error: any) {
     console.error("[YouTubeTimestampServer] Failed to auto-start server:", error);
 }
-
 
