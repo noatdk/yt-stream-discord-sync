@@ -252,6 +252,13 @@
         currentPointerTimestamp = null;
     }
 
+    function clearTimestampActions() {
+        const actions = Array.from(document.querySelectorAll('[data-yt-discord-sync-action="true"]'));
+        for (const action of actions) {
+            action.remove();
+        }
+    }
+
     function createJumpButton(timestampValue) {
         const button = document.createElement("button");
         button.type = "button";
@@ -630,6 +637,7 @@
 
         isScrolling = false;
         clearPointerMarker();
+        clearTimestampActions();
 
         if (resetState) {
             targetTimestamp = null;
@@ -647,7 +655,10 @@
         if (timestampActionObserver || !document.body) return;
 
         timestampActionObserver = new MutationObserver(() => {
-            if (!enabled) return;
+            if (!enabled) {
+                clearTimestampActions();
+                return;
+            }
             decorateVisibleTimestampActions();
         });
 
